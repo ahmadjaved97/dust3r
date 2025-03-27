@@ -11,6 +11,8 @@ from .scannetpp import ScanNetpp  # noqa
 from .staticthings3d import StaticThings3D  # noqa
 from .waymo import Waymo  # noqa
 from .wildrgbd import WildRGBD  # noqa
+from .frieburg import FreiburgDataset
+from .freiburg_v3 import FreiburgDatasetThermal
 
 
 def get_data_loader(dataset, batch_size, num_workers=8, shuffle=True, drop_last=True, pin_mem=True):
