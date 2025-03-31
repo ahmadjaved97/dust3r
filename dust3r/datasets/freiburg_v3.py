@@ -17,12 +17,6 @@ from dust3r.utils.image import imread_cv2
 def enhance_thermal_image(image):
     """
     Enhances a grayscale thermal image using CLAHE, sharpening, and unsharp masking.
-
-    Args:
-        image: Grayscale thermal image (H, W), dtype float or uint8.
-
-    Returns:
-        Enhanced RGB image (H, W, 3), dtype uint8.
     """
     # Step 1: Normalize if not uint8
     if image.dtype != np.uint8:
@@ -52,16 +46,50 @@ def enhance_thermal_image(image):
     return final
 
 
+def enhance_edges(gray_path, rgb_path):
+    # Load images
+    gray = cv2.imread(gray_path, cv2.IMREAD_GRAYSCALE)
+    rgb = cv2.imread(rgb_path)
+
+    # Resize gray if needed to match RGB
+    if gray.shape != rgb.shape[:2]:
+        gray = cv2.resize(gray, (rgb.shape[1], rgb.shape[0]))
+
+    #Apply CLAHE to the gray image
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    gray_clahe = clahe.apply(gray)
+
+    #Convert RGB to grayscale and extract edges
+    gray_rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray_rgb, threshold1=50, threshold2=150)
+    edges_dilated = cv2.dilate(edges, np.ones((2, 2), np.uint8), iterations=1)
+
+    #  Overlay edges (white) onto CLAHE image
+    enhanced = gray_clahe.copy()
+    enhanced[edges_dilated > 0] = 255
+
+    return enhanced
+
+def enhance_edges(gray):
+
+    #Apply CLAHE to the gray image
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    gray_clahe = clahe.apply(gray)
+
+    return gray_clahe
+
 class FreiburgDatasetThermal(BaseStereoViewDataset):
     """
     PyTorch Dataset class for Freiburg Thermal Dataset.
     Dynamically loads IR (or optionally RGB), depth maps, intrinsics, and extrinsics.
     """
-    def __init__(self, root_dir, dataset_filename, split="train", use_rgb=False, resolution=224, *args, **kwargs):
-        assert resolution is not None, "🚨 Error: resolution must be defined!"
+    def __init__(self, root_dir, dataset_filename, split="train", use_rgb=False,use_enhance=True, clahe=False, resolution=224, *args, **kwargs):
+        assert resolution is not None, "Error: resolution must be defined!"
 
         self.root_dir = root_dir
         self.use_rgb = use_rgb
+        self.use_enhance = use_enhance
+        self.clahe = clahe
         super().__init__(split=split, resolution=resolution, *args, **kwargs)
 
         self.dataset_label = "FreiburgThermal"
@@ -72,21 +100,22 @@ class FreiburgDatasetThermal(BaseStereoViewDataset):
 
         num_samples = len(self.metadata)
         print('Total samples: ', num_samples)
-        train_split = int(0.95 * num_samples)
 
-        if split == "train":
-            self.metadata = self.metadata[:train_split]
-        else:
-            self.metadata = self.metadata[train_split:]
-
-        # self.combinations = [(i, i + 1) for i in range(0, len(self.metadata) - 1)]
         # ---- Example pairing strategy: (i, i+1) ----
-        self.combinations = [(i, i+1) for i in range(0, len(self.metadata), 2) if i+1 < len(self.metadata)]
+        # 2 pair
+        # self.combinations = [(i, i+1) for i in range(0, len(self.metadata), 2) if i+1 < len(self.metadata)]
+        # 3 pair
+        self.combinations = [(i, j) for i in range(len(self.metadata)) for j in (i+1, i+2, i+3)  if j < len(self.metadata)]
+        # 4 pair
+        # self.combinations = [(i, j) for i in range(len(self.metadata)) for j in range(i + 1, i + 5) if j < len(self.metadata)]
+        # 6 pair
+        # self.combinations = [(i, j) for i in range(len(self.metadata)) for j in range(i, i + 6) if j < len(self.metadata)]
+
 
         print(f"[FreiburgDataset] Using {len(self.metadata)} entries and {len(self.combinations)} pairs for split='{split}'")
 
     def __len__(self):
-        return len(self.metadata)
+        return len(self.combinations)
 
     def _get_metadatapath(self, idx):
         return self.metadata[idx]
@@ -103,7 +132,8 @@ class FreiburgDatasetThermal(BaseStereoViewDataset):
         return depth_data.astype(np.float32)
 
     def _get_views(self, idx, resolution, rng):
-        img1_idx, img2_idx = self.combinations[idx % len(self.combinations)]
+        # img1_idx, img2_idx = self.combinations[idx % len(self.combinations)]
+        img1_idx, img2_idx = self.combinations[idx]
 
         views = []
         for im_idx in [img1_idx, img2_idx]:
@@ -115,6 +145,10 @@ class FreiburgDatasetThermal(BaseStereoViewDataset):
             camera_pose_4x4 = np.array(metadata["extrinsics"], dtype=np.float32)
 
             image = imread_cv2(impath, cv2.IMREAD_GRAYSCALE if not self.use_rgb else cv2.IMREAD_UNCHANGED)
+
+            if not self.use_rgb and self.clahe:
+                image = enhance_edges(image)
+
             if not self.use_rgb:
                 image = np.stack([image]*3, axis=-1)  # Grayscale -> 3-channel manually
                 
@@ -122,16 +156,18 @@ class FreiburgDatasetThermal(BaseStereoViewDataset):
             original_shape = tuple(metadata["shape"])
 
             image = cv2.resize(image, (original_shape[1], original_shape[0]), interpolation=cv2.INTER_NEAREST)
-            if not self.use_rgb:
+            if not self.use_rgb and self.use_enhance:
                 image = enhance_thermal_image(image)
 
 
             if isinstance(image, np.ndarray):
                 image = Image.fromarray(image)
+            
 
             image, depthmap, K = self._crop_resize_if_necessary(
                 image, depthmap, K, resolution, rng=rng, info=impath
             )
+
 
             views.append({
                 "img": image,
@@ -145,13 +181,13 @@ class FreiburgDatasetThermal(BaseStereoViewDataset):
         return views
 
 
-# Example usage
 if __name__ == "__main__":
-    dataset_ir = FreiburgDatasetThermal(root_dir="/lustre/mlnvme/data/s63ajave_hpc-cuda_lab", dataset_filename="dataset_v1_224.json", split="train", use_rgb=False, resolution=224)
-    dataset_rgb = FreiburgDatasetThermal(root_dir="/lustre/mlnvme/data/s63ajave_hpc-cuda_lab",dataset_filename="dataset_v1_224.json", split="train", use_rgb=True, resolution=224)
+    dataset_ir = FreiburgDatasetThermal(root_dir="/lustre/mlnvme/data/s63ajave_hpc-cuda_lab", dataset_filename="dataset_v1_224_train.json", split="train", use_rgb=False,use_enhance=False,clahe=False, resolution=224)
 
     sample_ir = dataset_ir[0]
-    sample_rgb = dataset_rgb[0]
+    print('Total dataset length: ', len(dataset_ir))
+    # print('Idxs for last index of dataset: ', dataset_ir[1])
+    
     for i in range(90, 100):
         sample_ir = dataset_ir[i]
         img = sample_ir[0]["img"].squeeze(0).detach().cpu().numpy()
@@ -167,5 +203,5 @@ if __name__ == "__main__":
         cv2.imwrite(f"depthmap{i}.png", depth_colored)
 
 
-    print("IR Image Shape:", sample_ir[0]["img"].shape)
-    print("Depth Shape:", sample_ir[0]["depthmap"].shape)
+    # print("IR Image Shape:", sample_ir[0]["img"].shape)
+    # print("Depth Shape:", sample_ir[0]["depthmap"].shape)
