@@ -1,5 +1,5 @@
 import sys
-sys.path.append("/home/s63ajave_hpc/dust3r")
+sys.path.append("../dust3r")
 import os
 import json
 import numpy as np
@@ -182,7 +182,7 @@ class FreiburgDatasetThermal(BaseStereoViewDataset):
 
 
 if __name__ == "__main__":
-    dataset_ir = FreiburgDatasetThermal(root_dir="/lustre/mlnvme/data/s63ajave_hpc-cuda_lab", dataset_filename="dataset_v1_224_train.json", split="train", use_rgb=False,use_enhance=False,clahe=False, resolution=224)
+    dataset_ir = FreiburgDatasetThermal(root_dir="../data/cuda_lab", dataset_filename="dataset_v1_224_train.json", split="train", use_rgb=False,use_enhance=False,clahe=False, resolution=224)
 
     sample_ir = dataset_ir[0]
     print('Total dataset length: ', len(dataset_ir))
